@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complex Dune and GraphQL Query</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .data-container { margin-top: 20px; background: #f4f4f4; padding: 10px; border-radius: 5px; }
+        .timer { margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>执行蓝库存查询</h1>
+    <button onclick="fetchData()">启动查询</button>
+    <div class="timer" id="timer">查询已执行时间: 0 秒</div>
+    <div id="dataContainer" class="data-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>钱包地址</th>
+                    <th>NFT数量</th>
+                </tr>
+            </thead>
+            <tbody id="resultsTable"></tbody>
+        </table>
+    </div>
+
+    <script>
+        let startTime;
+
+        function fetchData() {
+            startTime = Date.now();
+            const timerInterval = setInterval(() => {
+                const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
+                document.getElementById('timer').textContent = '查询已执行时间: ' + elapsedTime + ' 秒';
+            }, 100);
+
+            const options = {
+                method: 'POST',
+                headers: {
+                    'X-DUNE-API-KEY': 'st7zFpZewwGM0asqnnCFdXOk7lRPXhcf',
+                    'Content-Type': 'application/json'
+                }
+            };
+
+            fetch('https://api.dune.com/api/v1/query/3972974/execute', options)
+                .then(response => response.json())
+                .then(data => {
+                    getResults(data.execution_id, timerInterval);
+                })
+                .catch(err => {
+                    console.error('错误:', err);
+                    document.getElementById('jsonData').textContent = '加载数据时发生错误: ' + err.message;
+                    clearInterval(timerInterval);
+                });
+        }
+
+        function getResults(executionId, timerInterval) {
+            const options = {
+                method: 'GET',
+                headers: {
+                    'X-DUNE-API-KEY': 'st7zFpZewwGM0asqnnCFdXOk7lRPXhcf'
+                }
+            };
+
+            fetch(`https://api.dune.com/api/v1/execution/${executionId}/results`, options)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.state === "QUERY_STATE_COMPLETED") {
+                        clearInterval(timerInterval);
+                        document.getElementById('timer').textContent += ' (查询完成)';
+                        if (data.result && data.result.rows) {
+                            queryMooar(data.result.rows); // 传递正确的数据数组
+                        } else {
+                            console.error('返回数据中缺少预期的结果字段');
+                            document.getElementById('jsonData').textContent = '返回数据中缺少预期的结果字段';
+                        }
+                    } else {
+                        setTimeout(() => getResults(executionId, timerInterval), 2000);
+                    }
+                })
+                .catch(err => {
+                    console.error('错误:', err);
+                    document.getElementById('jsonData').textContent = '获取结果时发生错误: ' + err.message;
+                    clearInterval(timerInterval);
+                });
+        }
+
+        function queryMooar(walletData) {
+            const results = walletData.map(wallet => {
+                return fetch('https://market2.mooar.com/graphql', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: `query queryOwnedNfts($filter: NFTFilterInput!) {
+                            filterMyNfts(filter: $filter) {
+                                nfts {
+                                    tokenId
+                                }
+                                hasMore
+                                limit
+                                offset
+                            }
+                        }`,
+                        variables: {
+                            filter: {
+                                filter: {
+                                    collections: ["0x834160CA762bc929152333fb909F670f17a3Dd44"],
+                                    traitType: [{ key: "Rarity", value: ["Rare"] }]
+                                },
+                                ethereumAddress: wallet.wallet,
+                                solanaAddress: "",
+                                sort: "Recently listed",
+                                limit: 1000,
+                                offset: 0
+                            }
+                        },
+                        operationName: "queryOwnedNfts"
+                    })
+                })
+                .then(response => response.json())
+                .then(response => {
+                    if (response.data && response.data.filterMyNfts) {
+                        return { wallet: wallet.wallet, nfts: response.data.filterMyNfts.nfts.length };
+                    } else {
+                        return { wallet: wallet.wallet, nfts: 0 };
+                    }
+                })
+                .catch(err => {
+                    console.error('查询钱包时出错:', err);
+                    return { wallet: wallet.wallet, nfts: 0 };
+                });
+            });
+
+            Promise.all(results).then(values => {
+                values.sort((a, b) => b.nfts - a.nfts);
+                updateResultsTable(values);
+            });
+        }
+
+        function updateResultsTable(data) {
+            const tableBody = document.getElementById('resultsTable');
+            tableBody.innerHTML = ''; // Clear previous results
+            data.forEach(item => {
+                let row = tableBody.insertRow();
+                row.insertCell(0).textContent = item.wallet;
+                row.insertCell(1).textContent = item.nfts;
+            });
+        }
+    </script>
+</body>
+</html>
